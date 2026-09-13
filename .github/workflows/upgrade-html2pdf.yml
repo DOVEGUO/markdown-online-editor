@@ -34,18 +34,72 @@ jobs:
       - name: Upgrade html2pdf.js to patched version
         run: yarn add html2pdf.js@0.14.0 --exact --non-interactive
 
-      - name: Use prebuilt browser bundle for Vue CLI 3 compatibility
+      - name: Adapt legacy Vue CLI build to local vendor script
         run: |
+          cat > commands/copy-vendor.js <<'EOF'
+          const { copyFileSync, mkdirSync } = require('fs')
+          const { join } = require('path')
+
+          const root = join(__dirname, '..')
+          const vendorDir = join(root, 'public', 'vendor')
+          mkdirSync(vendorDir, { recursive: true })
+
+          const files = [
+            [
+              join(root, 'node_modules', '@turbodocx', 'html-to-docx', 'dist', 'html-to-docx.browser.js'),
+              join(vendorDir, 'html-to-docx.browser.js'),
+            ],
+            [
+              join(root, 'node_modules', 'html2pdf.js', 'dist', 'html2pdf.bundle.min.js'),
+              join(vendorDir, 'html2pdf.bundle.min.js'),
+            ],
+          ]
+
+          for (const [source, destination] of files) {
+            copyFileSync(source, destination)
+          }
+          EOF
+
           python3 - <<'PY'
+          import json
           from pathlib import Path
-          path = Path('src/pages/ExportPdf.vue')
-          text = path.read_text()
-          old = "import html2pdf from 'html2pdf.js'"
-          new = "import html2pdf from 'html2pdf.js/dist/html2pdf.bundle.min.js'"
-          if old not in text:
-              raise SystemExit('Expected html2pdf import was not found')
-          path.write_text(text.replace(old, new, 1))
+
+          package = Path('package.json')
+          data = json.loads(package.read_text(encoding='utf-8'))
+          data['scripts']['prestart'] = 'node ./commands/copy-vendor.js'
+          data['scripts']['preserve'] = 'node ./commands/copy-vendor.js'
+          data['scripts']['prebuild'] = 'node ./commands/copy-vendor.js'
+          package.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+          index = Path('public/index.html')
+          html = index.read_text(encoding='utf-8')
+          marker = '  <div id="app"></div>'
+          script = '  <script src="<%= BASE_URL %>vendor/html2pdf.bundle.min.js"></script>\n'
+          if script not in html:
+              if marker not in html:
+                  raise SystemExit('Expected app marker was not found in public/index.html')
+              html = html.replace(marker, script + marker, 1)
+              index.write_text(html, encoding='utf-8')
+
+          pdf = Path('src/pages/ExportPdf.vue')
+          text = pdf.read_text(encoding='utf-8')
+          text = text.replace("import html2pdf from 'html2pdf.js'\n", '', 1)
+          needle = '    exportAndDownloadPdf(element, filename) {\n      const scale = window.devicePixelRatio'
+          replacement = """    exportAndDownloadPdf(element, filename) {
+              const html2pdf = window.html2pdf
+              if (typeof html2pdf !== 'function') {
+                this.isLoading = false
+                this.exporting = false
+                this.$message.error('PDF导出组件加载失败，请刷新页面后重试')
+                return
+              }
+              const scale = window.devicePixelRatio"""
+          if needle not in text:
+              raise SystemExit('Expected PDF export method was not found')
+          pdf.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
           PY
+
+          node ./commands/copy-vendor.js
 
       - name: Run unit tests
         run: yarn test --runInBand
@@ -57,7 +111,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add package.json yarn.lock src/pages/ExportPdf.vue
+          git add package.json yarn.lock commands/copy-vendor.js public/index.html src/pages/ExportPdf.vue
           if git diff --cached --quiet; then
             echo 'No dependency changes to commit'
             exit 0
