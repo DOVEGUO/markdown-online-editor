@@ -1,0 +1,205 @@
+name: Upgrade canvg Security Fix
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/upgrade-canvg.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upgrade-canvg
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --openssl-legacy-provider
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install Yarn Classic
+        run: npm install --global yarn@1.22.22
+
+      - name: Upgrade canvg to patched version
+        run: yarn add canvg@3.0.11 --exact --non-interactive
+
+      - name: Migrate canvg API and restore SVG DOM after capture
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/helper/export.js')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace("import canvg from 'canvg'", "import { Canvg } from 'canvg'", 1)
+          marker = 'const handleCaptureSvg = (targetElem) => {'
+          if marker not in text:
+              raise SystemExit('Expected handleCaptureSvg implementation was not found')
+          prefix = text.split(marker, 1)[0]
+          replacement = r'''const handleCaptureSvg = async (targetElem) => {
+            const replacements = []
+            const svgElem = targetElem.querySelectorAll('svg')
+
+            for (let key = 0, len = svgElem.length; key < len; key++) {
+              const node = svgElem[key]
+              const parentNode = node.parentNode
+
+              try {
+                // 获取 SVG 的 XML 字符串
+                const svgXml = new XMLSerializer().serializeToString(node)
+                // 创建一个新的 canvas 元素
+                const canvas = document.createElement('canvas')
+                // 设置 canvas 尺寸与 SVG 相同
+                const svgRect = node.getBoundingClientRect()
+                canvas.width = svgRect.width
+                canvas.height = svgRect.height
+
+                // canvg v3 使用 Canvg 实例异步完成渲染
+                const ctx = canvas.getContext('2d')
+                const renderer = Canvg.fromString(ctx, svgXml, {
+                  ignoreMouse: true,
+                  ignoreAnimation: true,
+                  ignoreDimensions: false,
+                  ignoreClear: true,
+                })
+                await renderer.render()
+
+                // 临时以 canvas 替代 SVG；截图完成后必须恢复原始 DOM
+                parentNode.replaceChild(canvas, node)
+                replacements.push({
+                  parent: parentNode,
+                  original: node,
+                  replacement: canvas,
+                })
+              } catch (error) {
+                console.error('处理SVG时出错:', error)
+              }
+            }
+
+            return replacements
+          }
+
+          const restoreCapturedSvg = (replacements) => {
+            replacements.forEach(({ parent, original, replacement }) => {
+              if (replacement.parentNode === parent) {
+                parent.replaceChild(original, replacement)
+              }
+            })
+          }
+
+          export const generateScreenshot = async (targetDom) => {
+            const replacements = await handleCaptureSvg(targetDom)
+
+            try {
+              const domStyleObj = getComputedStyle(targetDom)
+              TARGET_WIDTH = +domStyleObj.width.replace(`px`, '')
+              TARGET_HEIGHT = +domStyleObj.height.replace(`px`, '')
+
+              const scale = window.devicePixelRatio
+              const options = {
+                scale,
+                allowTaint: true,
+                useCORS: true, // 启用CORS支持
+                backgroundColor: '#fefefe',
+                imageTimeout: 0, // 禁用图像超时
+                logging: false,
+              }
+              const origCanvas = await html2canvas(targetDom, options)
+              const roundCanvas = drawRoundedRec(origCanvas, scale)
+              return drawShadow(roundCanvas)
+            } finally {
+              restoreCapturedSvg(replacements)
+            }
+          }
+          '''
+          path.write_text(prefix + replacement, encoding='utf-8')
+          PY
+
+          cat > tests/unit/exportImage.spec.js <<'EOF'
+          import html2canvas from 'html2canvas'
+          import { Canvg } from 'canvg'
+          import { generateScreenshot } from '@/helper/export'
+
+          jest.mock('html2canvas', () => jest.fn())
+          jest.mock('canvg', () => ({
+            Canvg: {
+              fromString: jest.fn(),
+            },
+          }))
+
+          describe('image export', () => {
+            const context = {
+              beginPath: jest.fn(),
+              moveTo: jest.fn(),
+              lineTo: jest.fn(),
+              quadraticCurveTo: jest.fn(),
+              clip: jest.fn(),
+              drawImage: jest.fn(),
+            }
+
+            beforeEach(() => {
+              jest.clearAllMocks()
+              Object.defineProperty(window, 'devicePixelRatio', {
+                configurable: true,
+                value: 1,
+              })
+              HTMLCanvasElement.prototype.getContext = jest.fn(() => context)
+            })
+
+            it('restores the original SVG after screenshot generation', async () => {
+              const target = document.createElement('div')
+              target.style.width = '320px'
+              target.style.height = '200px'
+              const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+              svg.setAttribute('width', '24')
+              svg.setAttribute('height', '24')
+              svg.getBoundingClientRect = jest.fn(() => ({ width: 24, height: 24 }))
+              target.appendChild(svg)
+              document.body.appendChild(target)
+
+              const renderer = { render: jest.fn(() => Promise.resolve()) }
+              Canvg.fromString.mockReturnValue(renderer)
+              const captured = document.createElement('canvas')
+              captured.width = 320
+              captured.height = 200
+              html2canvas.mockResolvedValue(captured)
+
+              await generateScreenshot(target)
+
+              expect(Canvg.fromString).toHaveBeenCalledTimes(1)
+              expect(renderer.render).toHaveBeenCalledTimes(1)
+              expect(target.querySelector('svg')).toBe(svg)
+              expect(target.querySelector('canvas')).toBeNull()
+
+              document.body.removeChild(target)
+            })
+          })
+          EOF
+
+      - name: Run unit tests
+        run: yarn test --runInBand
+
+      - name: Build production bundle
+        run: yarn build
+
+      - name: Commit verified dependency and export fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json yarn.lock src/helper/export.js tests/unit/exportImage.spec.js
+          if git diff --cached --quiet; then
+            echo 'No dependency changes to commit'
+            exit 0
+          fi
+          git commit -m 'security: update canvg to 3.0.11 and restore SVG after export [skip ci]'
+          git push
