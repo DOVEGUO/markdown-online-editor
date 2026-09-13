@@ -1,6 +1,6 @@
 /** @format */
 import html2canvas from 'html2canvas'
-import canvg from 'canvg'
+import { Canvg } from 'canvg'
 
 let TARGET_WIDTH = 960
 let TARGET_HEIGHT = 800
@@ -70,9 +70,8 @@ function drawShadow(origCanvas) {
  * @desc 兼容使用 html2canvas 库不能完整捕获 SVG 问题；
  * @param {Dom} targetElem - 所要导出目标 DOM
  */
-const handleCaptureSvg = (targetElem) => {
-  const nodesToRecover = []
-  const nodesToRemove = []
+const handleCaptureSvg = async (targetElem) => {
+  const replacements = []
   const svgElem = targetElem.querySelectorAll('svg')
 
   for (let key = 0, len = svgElem.length; key < len; key++) {
@@ -80,64 +79,69 @@ const handleCaptureSvg = (targetElem) => {
     const parentNode = node.parentNode
 
     try {
-      // 获取SVG的XML字符串
+      // 获取 SVG 的 XML 字符串
       const svgXml = new XMLSerializer().serializeToString(node)
-      // 创建一个新的canvas元素
+      // 创建一个新的 canvas 元素
       const canvas = document.createElement('canvas')
-      // 设置canvas尺寸与SVG相同
+      // 设置 canvas 尺寸与 SVG 相同
       const svgRect = node.getBoundingClientRect()
       canvas.width = svgRect.width
       canvas.height = svgRect.height
 
-      // 使用canvg渲染SVG到canvas
+      // canvg v3 使用 Canvg 实例异步完成渲染
       const ctx = canvas.getContext('2d')
-      canvg(canvas, svgXml, {
+      const renderer = Canvg.fromString(ctx, svgXml, {
         ignoreMouse: true,
         ignoreAnimation: true,
         ignoreDimensions: false,
         ignoreClear: true,
       })
+      await renderer.render()
 
-      // 保存原始节点信息以便恢复
-      nodesToRecover.push({
+      // 临时以 canvas 替代 SVG；截图完成后必须恢复原始 DOM
+      parentNode.replaceChild(canvas, node)
+      replacements.push({
         parent: parentNode,
-        child: node,
+        original: node,
+        replacement: canvas,
       })
-
-      // 临时移除SVG节点
-      parentNode.removeChild(node)
-
-      // 添加canvas替代SVG
-      nodesToRemove.push({
-        parent: parentNode,
-        child: canvas,
-      })
-      parentNode.appendChild(canvas)
     } catch (error) {
       console.error('处理SVG时出错:', error)
     }
   }
 
-  // 返回节点信息以便后续恢复
-  return { nodesToRecover, nodesToRemove }
+  return replacements
+}
+
+const restoreCapturedSvg = (replacements) => {
+  replacements.forEach(({ parent, original, replacement }) => {
+    if (replacement.parentNode === parent) {
+      parent.replaceChild(original, replacement)
+    }
+  })
 }
 
 export const generateScreenshot = async (targetDom) => {
-  handleCaptureSvg(targetDom)
-  const domStyleObj = getComputedStyle(targetDom)
-  TARGET_WIDTH = +domStyleObj.width.replace(`px`, '')
-  TARGET_HEIGHT = +domStyleObj.height.replace(`px`, '')
+  const replacements = await handleCaptureSvg(targetDom)
 
-  const scale = window.devicePixelRatio
-  const options = {
-    scale,
-    allowTaint: true,
-    useCORS: true, // 启用CORS支持
-    backgroundColor: '#fefefe',
-    imageTimeout: 0, // 禁用图像超时
-    logging: false,
+  try {
+    const domStyleObj = getComputedStyle(targetDom)
+    TARGET_WIDTH = +domStyleObj.width.replace(`px`, '')
+    TARGET_HEIGHT = +domStyleObj.height.replace(`px`, '')
+
+    const scale = window.devicePixelRatio
+    const options = {
+      scale,
+      allowTaint: true,
+      useCORS: true, // 启用CORS支持
+      backgroundColor: '#fefefe',
+      imageTimeout: 0, // 禁用图像超时
+      logging: false,
+    }
+    const origCanvas = await html2canvas(targetDom, options)
+    const roundCanvas = drawRoundedRec(origCanvas, scale)
+    return drawShadow(roundCanvas)
+  } finally {
+    restoreCapturedSvg(replacements)
   }
-  const origCanvas = await html2canvas(targetDom, options)
-  const roundCanvas = drawRoundedRec(origCanvas, scale)
-  return drawShadow(roundCanvas)
 }

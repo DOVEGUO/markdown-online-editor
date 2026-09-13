@@ -2864,15 +2864,7 @@ caniuse-lite@^1.0.0, caniuse-lite@^1.0.30001109, caniuse-lite@^1.0.30001449:
   resolved "https://registry.npmmirror.com/caniuse-lite/-/caniuse-lite-1.0.30001458.tgz"
   integrity sha512-lQ1VlUUq5q9ro9X+5gOEyH7i3vm+AYVT1WDCVB69XOZ17KZRhnZ9J0Sqz7wTHQaLBJccNCHq8/Ww5LlOIZbB0w==
 
-canvg@^2.0.0:
-  version "2.0.0"
-  resolved "https://registry.npmmirror.com/canvg/-/canvg-2.0.0.tgz"
-  integrity sha512-PiKa+sjzzAv8HONsBaJZRhZ3eCM5uJkpFgF0rSzcamOrdXdls81ukjNxtz7JYyxucj6WpIkZwk9j7Jku0+ivqQ==
-  dependencies:
-    rgbcolor "^1.0.1"
-    stackblur-canvas "^2.0.0"
-
-canvg@^3.0.11:
+canvg@3.0.11, canvg@^3.0.11:
   version "3.0.11"
   resolved "https://registry.npmmirror.com/canvg/-/canvg-3.0.11.tgz#4b4290a6c7fa36871fac2b14e432eff33b33cf2b"
   integrity sha512-5ON+q7jCTgMp9cjpu4Jo6XbvfYwSB2Ow3kzHKfIyJfaCAOHLbdKPQqGKgfED/R5B+3TFFfe8pegYA+b423SRyA==
