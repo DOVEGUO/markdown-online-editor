@@ -13,7 +13,6 @@
 </template>
 
 <script>
-import html2pdf from 'html2pdf.js'
 import PreviewVditor from '@components/PreviewVditor'
 import { getExportFileName } from '@helper/utils'
 import { getActiveDocId, getDocContent } from '@helper/storage'
@@ -40,7 +39,14 @@ export default {
 
   methods: {
     exportAndDownloadPdf(element, filename) {
-      const scale = window.devicePixelRatio
+    const html2pdf = window.html2pdf
+    if (typeof html2pdf !== 'function') {
+      this.isLoading = false
+      this.exporting = false
+      this.$message.error('PDF导出组件加载失败，请刷新页面后重试')
+      return
+    }
+    const scale = window.devicePixelRatio
       const opt = {
         margin: 1,
         filename: filename,
