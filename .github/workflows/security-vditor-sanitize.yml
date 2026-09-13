@@ -1,0 +1,132 @@
+name: Harden Vditor Preview Sanitization
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/security-vditor-sanitize.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harden-vditor-preview
+  cancel-in-progress: false
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --openssl-legacy-provider
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install Yarn Classic
+        run: npm install --global yarn@1.22.22
+
+      - name: Add current DOMPurify
+        run: yarn add dompurify@3.4.15 --exact --non-interactive
+
+      - name: Add second-layer HTML sanitization to Vditor previews
+        run: |
+          cat > src/helper/sanitizeHtml.js <<'EOF'
+          import DOMPurify from 'dompurify'
+
+          const PREVIEW_SANITIZE_OPTIONS = {
+            // Preserve legitimate embedded media while forbidding srcdoc, which can
+            // contain an entire executable HTML document.
+            ADD_TAGS: ['iframe'],
+            ADD_ATTR: ['allow', 'allowfullscreen', 'frameborder', 'scrolling'],
+            FORBID_ATTR: ['srcdoc'],
+          }
+
+          export const sanitizePreviewHtml = (html) =>
+            DOMPurify.sanitize(html == null ? '' : String(html), PREVIEW_SANITIZE_OPTIONS)
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def patch(path_name):
+              path = Path(path_name)
+              text = path.read_text(encoding='utf-8')
+              import_anchor = "import 'vditor/src/assets/less/index.less'\n"
+              import_line = "import { sanitizePreviewHtml } from '@helper/sanitizeHtml'\n"
+              if import_line not in text:
+                  if import_anchor not in text:
+                      raise SystemExit(f'Vditor import anchor missing in {path_name}')
+                  text = text.replace(import_anchor, import_anchor + import_line, 1)
+
+              # Both current components have a preview block beginning with delay.
+              old = "        preview: {\n          delay: "
+              if old not in text:
+                  raise SystemExit(f'Preview block missing in {path_name}')
+              text = text.replace(
+                  old,
+                  "        preview: {\n          transform: sanitizePreviewHtml,\n          markdown: { sanitize: true },\n          delay: ",
+                  1,
+              )
+              path.write_text(text, encoding='utf-8')
+
+          patch('src/pages/Main.vue')
+          patch('src/components/PreviewVditor.vue')
+          PY
+
+          cat > tests/unit/sanitizeHtml.spec.js <<'EOF'
+          import { sanitizePreviewHtml } from '@/helper/sanitizeHtml'
+
+          describe('Vditor preview HTML sanitization', () => {
+            it('blocks javascript form actions', () => {
+              const result = sanitizePreviewHtml('<form action="javascript:alert(1)"><button>x</button></form>')
+              expect(result.toLowerCase()).not.toContain('javascript:')
+            })
+
+            it('blocks javascript SVG xlink href values', () => {
+              const result = sanitizePreviewHtml(
+                '<svg xmlns="http://www.w3.org/2000/svg"><a xlink:href="javascript:alert(1)"><text>x</text></a></svg>',
+              )
+              expect(result.toLowerCase()).not.toContain('javascript:')
+            })
+
+            it('removes iframe srcdoc but preserves a safe iframe source', () => {
+              const result = sanitizePreviewHtml(
+                '<iframe src="https://www.youtube.com/embed/demo" srcdoc="<img src=x onerror=alert(1)>"></iframe>',
+              )
+              expect(result).toContain('<iframe')
+              expect(result).toContain('https://www.youtube.com/embed/demo')
+              expect(result.toLowerCase()).not.toContain('srcdoc')
+              expect(result.toLowerCase()).not.toContain('onerror')
+            })
+
+            it('removes ordinary event-handler attributes', () => {
+              const result = sanitizePreviewHtml('<img src="https://example.com/a.png" onerror="alert(1)">')
+              expect(result.toLowerCase()).not.toContain('onerror')
+              expect(result).toContain('https://example.com/a.png')
+            })
+          })
+          EOF
+
+      - name: Run unit tests
+        run: yarn test --runInBand
+
+      - name: Build production bundle
+        run: yarn build
+
+      - name: Commit verified hardening
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json yarn.lock src/helper/sanitizeHtml.js src/pages/Main.vue src/components/PreviewVditor.vue tests/unit/sanitizeHtml.spec.js
+          if git diff --cached --quiet; then
+            echo 'No hardening changes to commit'
+            exit 0
+          fi
+          git commit -m 'security: harden Vditor preview HTML sanitization [skip ci]'
+          git push
