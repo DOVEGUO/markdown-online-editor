@@ -1,0 +1,53 @@
+name: Upgrade html2pdf Security Fix
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/upgrade-html2pdf.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upgrade-html2pdf
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --openssl-legacy-provider
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install Yarn Classic
+        run: npm install --global yarn@1.22.22
+
+      - name: Upgrade html2pdf.js to patched version
+        run: yarn add html2pdf.js@0.14.0 --exact --non-interactive
+
+      - name: Run unit tests
+        run: yarn test --runInBand
+
+      - name: Build production bundle
+        run: yarn build
+
+      - name: Commit verified dependency update
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json yarn.lock
+          if git diff --cached --quiet; then
+            echo 'No dependency changes to commit'
+            exit 0
+          fi
+          git commit -m 'security: update html2pdf.js to 0.14.0 [skip ci]'
+          git push
