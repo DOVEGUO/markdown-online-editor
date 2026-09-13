@@ -35,6 +35,7 @@
 <script>
 import Vditor from 'vditor'
 import 'vditor/src/assets/less/index.less'
+import { sanitizePreviewHtml } from '@helper/sanitizeHtml'
 import HeaderNav from './partials/HeaderNav'
 import Sidebar from '@components/Sidebar'
 import defaultText from '@config/default'
@@ -127,6 +128,8 @@ export default {
         value: initialContent,
         cache: { enable: false },
         preview: {
+          transform: sanitizePreviewHtml,
+          markdown: { sanitize: true },
           delay: 100,
           show: !this.isMobile,
         },

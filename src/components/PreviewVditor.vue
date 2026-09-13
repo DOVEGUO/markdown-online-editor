@@ -7,6 +7,7 @@
 <script>
 import Vditor from 'vditor'
 import 'vditor/src/assets/less/index.less'
+import { sanitizePreviewHtml } from '@helper/sanitizeHtml'
 import { updateHtmlStyle, hideVditorTextarea } from '@helper/utils'
 
 export default {
@@ -44,6 +45,8 @@ export default {
         width: '61.8%',
         mode: 'sv',
         preview: {
+          transform: sanitizePreviewHtml,
+          markdown: { sanitize: true },
           delay: 1000,
           show: true,
         },
