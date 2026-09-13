@@ -149,6 +149,11 @@ jobs:
 
             beforeEach(() => {
               jest.clearAllMocks()
+              global.XMLSerializer = class XMLSerializer {
+                serializeToString() {
+                  return '<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+                }
+              }
               Object.defineProperty(window, 'devicePixelRatio', {
                 configurable: true,
                 value: 1,
